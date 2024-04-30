@@ -56,7 +56,7 @@ class SbMsgSubIO extends Bundle {
     val msgSubCode = Input(MsgSubCode())
     val data0 = Input(Bits(32.W))
     val data1 = Input(Bits(32.W))
-    val bits = Valid(Bits(64.W))  // Change this to sideband serializer ratio later
+    val bits = Decoupled(Bits(128.W))  // Change this to sideband serializer ratio later
 }
 
 class SbMsgIO extends Bundle {

@@ -166,8 +166,6 @@ class d2dadaptor (
                 }
 
         }
-        // DAPM unimplemented, same as L1 transition
-        // l1 unsure, l1 for power management
         is(PhyState.l1) {
             when(io.fdi.lp_state_req === PhyStateReq.retrain) {
                 adaptorState_next := PhyState.retrain

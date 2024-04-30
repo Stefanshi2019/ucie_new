@@ -110,7 +110,7 @@ object MsgCode extends ChiselEnum {
 object MsgSubCode extends ChiselEnum {
 
 
-  val Crd       = Value(0x00.U(8.W))  // Nop 0x00
+  val Nop       = Value(0x00.U(8.W))  // Nop 0x00
   val Active    = Value(0x01.U(8.W))  // LinkMgmt 0x01 - 0x06
 
   val PMNAK     = Value(0x02.U(8.W))  // LinkMgmt 0x01 - 0x06
@@ -125,7 +125,9 @@ object MsgSubCode extends ChiselEnum {
   val Req = Value(0x10.U(8.W))  // ParityFeature 0x07
   val Nak = Value(0x11.U(8.W))  // ParityFeature 0x08 
   val Ack = Value(0x12.U(8.W))  // ParityFeature 0x08
-
+  val Crd = Value(0x13.U(8.W))  // Nop 0x00
+ 
+  val dummy = Value(0xFF.U(8.W)) // If not this, Chisel will force optimize the bits to be 5 instead 8. very stupid
   // // Chisel enum doesn't allow mapping to same value
   // // Change to different value for now, will fix later
   // // Original, commented for now

@@ -26,20 +26,6 @@ import sideband._
 //   val pl_wake_ack = Input(Bool())
 // }
 
-class SbMsgSenderArbitor extends Module {
-    val io = IO(new Bundle {
-        val rdiSb = new SbMsgSubIO()
-        val phySb = new SbMsgSubIO()
-        val outSb = Flipped(new SbMsgSubIO())
-    }
-    )
-    when(io.rdiSb.handshake.valid === true.B) {
-        io.outSb <> io.rdiSb
-    }.otherwise{
-        io.outSb <> io.phySb
-    }
-}
-
 class LogicalPhy(
     afeParams: AfeParams,
     rdiParams: RdiParams,
@@ -51,21 +37,43 @@ class LogicalPhy(
         val rdiSb = new SbMsgIO() // contains tx and rx
     })
     
+
+    // Initalize temporarily to pass tests
+    io.sbAfe.pllLock := false.B
+    io.mbAfe.txData.bits := Seq.fill(afeParams.mbLanes)(0.U)
+
+    io.rdi.plData.valid := false.B
+    io.mbAfe.txData.valid := false.B
+    // io.rdi.lclk := clock
+    io.rdi.lpData.ready := false.B
+    io.rdi.plData.bits := false.B
+    io.mbAfe.rxData.ready := true.B
+
+    // End temp initialize
     val sbMsgSender = Module(new SidebandMessageSender()) 
-    
-    val sbMsgSenderArbitor = Module(new SbMsgSenderArbitor()) 
+
+   
+
+
+    val sbMsgSenderArbitor = Module(new SidebandMessageSenderArbitor()) 
 
     sbMsgSenderArbitor.io.rdiSb <> io.rdiSb.tx
     sbMsgSenderArbitor.io.phySb.handshake.valid := false.B 
-    sbMsgSenderArbitor.io.phySb.opcode := 0.U // typically MessageWithoutData == b10010
-    sbMsgSenderArbitor.io.phySb.msgCode := 0.U // typically LinkMgmt_RDI_Req == 0x01
-    sbMsgSenderArbitor.io.phySb.msgSubCode := 0.U // RDI/FDI_state_req state value
-    sbMsgSenderArbitor.io.phySb.msgInfo := 0.U // == RegularResponse, usually don't change
+    sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData // typically MessageWithoutData == b10010
+    sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.Nop // typically LinkMgmt_RDI_Req == 0x01
+    sbMsgSenderArbitor.io.phySb.msgSubCode := MsgSubCode.Nak // RDI/FDI_state_req state value
+    sbMsgSenderArbitor.io.phySb.msgInfo := MsgInfo.RegularResponse // == RegularResponse, usually don't change
     sbMsgSenderArbitor.io.phySb.data0 := 0.U // no use for now
     sbMsgSenderArbitor.io.phySb.data1 := 0.U // no use for now
-
+    sbMsgSenderArbitor.io.phySb.bits.ready := true.B
     sbMsgSender.io <> sbMsgSenderArbitor.io.outSb
 
+
+    io.sbAfe.rxData.ready := true.B
+    io.sbAfe.txData.valid := sbMsgSender.io.bits.valid
+    io.sbAfe.rxEn := true.B
+    io.sbAfe.txData.bits := sbMsgSender.io.bits.bits
+    // println(s"sbafe width is ${io.sbAfe.txData.bits.getWidth}")
     
     val sbMsgReceiver = Module(new SidebandMessageReceiver())
     // sbMsgReceiver.io.tx.ready := true.B // always true, sample only on sbMsgReceiver.io.tx.valid 
@@ -74,7 +82,24 @@ class LogicalPhy(
     // sbMsgReceiver.io.msgInfo = Output(MsgInfo())
     // sbMsgReceiver.io.msgSubCode = Output(MsgSubCode())
     
-    io.rdiSb.rx <> sbMsgReceiver.io
+    // io.rdiSb.rx.bits.bits := sbMsgReceiver.io.bits.bits 
+    // io.rdiSb.rx.bits.valid := sbMsgReceiver.io.bits.valid 
+    io.rdiSb.rx.bits.ready := true.B
+    io.rdiSb.rx.data0 := sbMsgReceiver.io.data0
+    io.rdiSb.rx.data1 := sbMsgReceiver.io.data1 
+    // io.rdiSb.rx.handshake <> sbMsgReceiver.io.handshake 
+    io.rdiSb.rx.handshake.valid := sbMsgReceiver.io.handshake.valid
+    io.rdiSb.rx.handshake.bits := sbMsgReceiver.io.handshake.bits 
+    sbMsgReceiver.io.handshake.ready := true.B
+    io.rdiSb.rx.msgCode := sbMsgReceiver.io.msgCode 
+    io.rdiSb.rx.msgSubCode := sbMsgReceiver.io.msgSubCode 
+    io.rdiSb.rx.msgInfo := sbMsgReceiver.io.msgInfo
+    io.rdiSb.rx.opcode := sbMsgReceiver.io.opcode 
+
+    // data1 
+    
+    sbMsgReceiver.io.bits.bits := io.sbAfe.rxData.bits
+    sbMsgReceiver.io.bits.valid := io.sbAfe.rxData.valid
 
     // Connections End ------------------------------------------------------------------
 
@@ -104,9 +129,31 @@ class LogicalPhy(
     io.rdi.pl_stallreq := pl_stallreq_reg
     io.rdi.pl_clk_req := pl_clk_req_reg
     io.rdi.pl_wake_ack := pl_wake_ack_reg
-    
+
     val sb_lock = RegInit(false.B)
-    
+    val rdi_state_change_req =  RegInit(MsgSubCode.Nop)
+    val rdi_state_change_rsp = RegInit(MsgSubCode.Nop)
+    when(
+        sbMsgReceiver.io.handshake.valid === true.B &&
+        sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
+        sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req
+    ){
+        rdi_state_change_req := sbMsgReceiver.io.msgSubCode
+    }.otherwise{
+        rdi_state_change_req := MsgSubCode.Nop
+    }
+ 
+    when(
+        sbMsgReceiver.io.handshake.valid === true.B &&
+        sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
+        sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Rsp
+    ){
+        rdi_state_change_rsp := sbMsgReceiver.io.msgSubCode
+ 
+    }.otherwise{
+        rdi_state_change_rsp := MsgSubCode.Nop
+    }
+
     switch(phyState) {
         // Link Error, Disabled, Link Reset implemented below switch
         is(PhyState.reset) {
@@ -117,9 +164,17 @@ class LogicalPhy(
 
             // Stage 2: start - exchange parameters on sideband and mainband training
  
-           when(io.rdi.lp_state_req === PhyStateReq.active) { 
-                // compose sb message to send to link partner
-                when (sb_lock === false.B) {
+           when(io.rdi.lp_state_req === PhyStateReq.active) {
+                // prioritize ack reply first before state transition to avoid collision
+                when(rdi_state_change_req === MsgSubCode.Active) {
+                        sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
+                        sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData
+                        sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Rsp
+                        sbMsgSenderArbitor.io.phySb.msgSubCode := MsgSubCode.Active
+                        // phyState := PhyState.active
+                        rdi_state_change_req := MsgSubCode.Nop 
+                }.elsewhen (sb_lock === false.B) {
+                    // compose sb message to send to link partner
                     sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
                     sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData
                     sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Req
@@ -127,20 +182,17 @@ class LogicalPhy(
                     sb_lock := true.B 
                 }.otherwise {
                     // wait for ack 
-                    when(sbMsgReceiver.io.bits.valid === true.B) {
-                        when(
-                            sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
-                            sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req &&
-                            sbMsgReceiver.io.msgSubCode === MsgSubCode.Active
-                        ) {
-                            phyState := PhyState.active
-                            sb_lock := false.B
-                        }.otherwise{
-                            printf("Unknown behavior in PHY Reset\n")
-                        }
+                    when(rdi_state_change_rsp === MsgSubCode.Active ) {
+                        // Clear last state req 
+                        phyState := PhyState.active
+                        rdi_state_change_rsp := MsgSubCode.Nop
+                        sb_lock := false.B
                     }
                 }
             }
+            // if receives a request, send response only when local lp_state_req is high
+            
+
             // Stage 2: complete - exchange parameters on sideband and mainband training
  
         }
@@ -276,7 +328,7 @@ class LogicalPhy(
                     phyState := PhyState.linkError
                     sb_lock := false.B
                 }.otherwise{
-                    printf("Unknown behavior in PHY Reset\n")
+                    printf("Checkpoint 1\n")
                 }
             }
         }
@@ -288,6 +340,7 @@ class LogicalPhy(
             sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
             sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req
         ) {
+            
             when(sbMsgReceiver.io.msgSubCode === MsgSubCode.LinkReset ||
                 sbMsgReceiver.io.msgSubCode === MsgSubCode.Disable ||
                 sbMsgReceiver.io.msgSubCode === MsgSubCode.LinkError
@@ -307,8 +360,6 @@ class LogicalPhy(
                     (sbMsgReceiver.io.msgSubCode === MsgSubCode.LinkError, PhyState.linkError),
                 ))
             }
-        }.otherwise{
-            printf("Unknown behavior in PHY Reset\n")
         }
     }
 

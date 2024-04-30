@@ -95,7 +95,7 @@ class Rdi(rdiParams: RdiParams) extends Bundle {
     *
     * Encompasses lp_irdy, lp_valid, and pl_trdy from the UCIe specification.
     */
-  val lclk = Input(Clock())
+  // val lclk = Input(Clock())
 
   val lpData = Decoupled3(Bits((8 * rdiParams.width).W)) // abnormal signal
   // val lp_irdy = Output(Bool())

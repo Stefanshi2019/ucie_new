@@ -12,7 +12,6 @@ class SidebandMessageSender extends Module {
         new SbMsgSubIO()
     )
    
-    val msgHeader = new SidebandMessageHeader()
     val srcid = WireInit(SourceID.DieToDieAdapter)
 
     val rsvd_00 = WireInit(0.U(2.W))
@@ -24,38 +23,40 @@ class SidebandMessageSender extends Module {
     val cp = WireInit(0.U(1.W))
     val rsvd_10 = WireInit(0.U(3.W))
     val dstid = WireInit(0.U(3.W))
+    val data0 = WireInit(0.U(32.W))
+    val data1 = WireInit(0.U(32.W))
+    
+    val bits_bits_reg = WireInit(0.U(128.W))
+    val bits_valid_reg = WireInit(false.B)
 
-    // Phase 0
-    msgHeader.srcid := srcid 
-    msgHeader.rsvd_00 := rsvd_00
-    msgHeader.rsvd_01 := rsvd_01 
-    msgHeader.msgCode := io.msgCode
-    msgHeader.rsvd_02 := rsvd_02 
-    msgHeader.opcode := io.opcode
-    // Phase 1
-    msgHeader.dp := dp 
-    msgHeader.cp := cp
-    msgHeader.rsvd_10 := rsvd_10 
-    msgHeader.dstid := dstid 
-    msgHeader.msgInfo := io.msgInfo
-    msgHeader.msgSubCode := io.msgInfo
-
-    io.bits.bits := Cat(
-        msgHeader.srcid.asUInt, 
-        msgHeader.rsvd_00,
-        msgHeader.rsvd_01,
-        msgHeader.msgCode.asUInt,
-        msgHeader.rsvd_02,
-        msgHeader.opcode.asUInt,
-        msgHeader.dp,
-        msgHeader.cp,
-        msgHeader.rsvd_10,
-        msgHeader.dstid.asUInt,
-        msgHeader.msgInfo.asUInt,
-        msgHeader.msgSubCode.asUInt
+    bits_bits_reg  := Cat(
+        srcid.asUInt, 
+        rsvd_00.asUInt,
+        rsvd_01.asUInt,
+        io.msgCode.asUInt,
+        rsvd_02.asUInt,
+        io.opcode.asUInt,
+        dp.asUInt,
+        cp.asUInt,
+        rsvd_10.asUInt,
+        dstid.asUInt,
+        io.msgInfo.asUInt,
+        io.msgSubCode.asUInt,
+        data0.asUInt,
+        data1.asUInt
     )
+    // bits_valid_reg := io.handshake.valid
+    val fifo = Module(new Queue(UInt(128.W), 8))
+    fifo.io.enq.valid := io.handshake.valid
+    fifo.io.enq.bits := bits_bits_reg 
+    io.handshake.ready := fifo.io.enq.ready 
 
+    fifo.io.deq <> io.bits
+
+
+    // val fifo = Module(new )
     // bits no back pressure allowed, only valid and bits
-    io.bits.valid := io.handshake.valid 
-    io.handshake.ready := true.B // always enable for now
+    // io.bits.bits := bits_bits_reg
+    // io.bits.valid := bits_valid_reg
+    // io.handshake.ready := true.B // always enable for now
 }
