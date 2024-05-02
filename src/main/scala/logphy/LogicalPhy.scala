@@ -34,7 +34,7 @@ class LogicalPhy(
         val rdi = Flipped(new Rdi(rdiParams))
         val mbAfe = new MainbandAfeIo(afeParams) // do afe later
         val sbAfe = new SidebandAfeIo(afeParams)
-        val rdiSb = new SbMsgIO() // contains tx and rx
+        val rdiSb = Flipped(new SbMsgIO()) // contains tx and rx
     })
     
 
@@ -57,7 +57,7 @@ class LogicalPhy(
 
     val sbMsgSenderArbitor = Module(new SidebandMessageSenderArbitor()) 
 
-    sbMsgSenderArbitor.io.rdiSb <> io.rdiSb.tx
+    sbMsgSenderArbitor.io.rdiSb <> io.rdiSb.rx
     sbMsgSenderArbitor.io.phySb.handshake.valid := false.B 
     sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData // typically MessageWithoutData == b10010
     sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.Nop // typically LinkMgmt_RDI_Req == 0x01
@@ -84,17 +84,17 @@ class LogicalPhy(
     
     // io.rdiSb.rx.bits.bits := sbMsgReceiver.io.bits.bits 
     // io.rdiSb.rx.bits.valid := sbMsgReceiver.io.bits.valid 
-    io.rdiSb.rx.bits.ready := true.B
-    io.rdiSb.rx.data0 := sbMsgReceiver.io.data0
-    io.rdiSb.rx.data1 := sbMsgReceiver.io.data1 
-    // io.rdiSb.rx.handshake <> sbMsgReceiver.io.handshake 
-    io.rdiSb.rx.handshake.valid := sbMsgReceiver.io.handshake.valid
-    io.rdiSb.rx.handshake.bits := sbMsgReceiver.io.handshake.bits 
-    sbMsgReceiver.io.handshake.ready := true.B
-    io.rdiSb.rx.msgCode := sbMsgReceiver.io.msgCode 
-    io.rdiSb.rx.msgSubCode := sbMsgReceiver.io.msgSubCode 
-    io.rdiSb.rx.msgInfo := sbMsgReceiver.io.msgInfo
-    io.rdiSb.rx.opcode := sbMsgReceiver.io.opcode 
+    io.rdiSb.tx.bits.ready := true.B
+    io.rdiSb.tx.data0 := sbMsgReceiver.io.data0
+    io.rdiSb.tx.data1 := sbMsgReceiver.io.data1 
+    // io.rdiSb.tx.handshake <> sbMsgReceiver.io.handshake 
+    io.rdiSb.tx.handshake.valid := sbMsgReceiver.io.handshake.valid
+    io.rdiSb.tx.handshake.bits := sbMsgReceiver.io.handshake.bits 
+    sbMsgReceiver.io.handshake.ready := false.B
+    io.rdiSb.tx.msgCode := sbMsgReceiver.io.msgCode 
+    io.rdiSb.tx.msgSubCode := sbMsgReceiver.io.msgSubCode 
+    io.rdiSb.tx.msgInfo := sbMsgReceiver.io.msgInfo
+    io.rdiSb.tx.opcode := sbMsgReceiver.io.opcode 
 
     // data1 
     
@@ -133,26 +133,11 @@ class LogicalPhy(
     val sb_lock = RegInit(false.B)
     val rdi_state_change_req =  RegInit(MsgSubCode.Nop)
     val rdi_state_change_rsp = RegInit(MsgSubCode.Nop)
-    when(
-        sbMsgReceiver.io.handshake.valid === true.B &&
-        sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
-        sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req
-    ){
-        rdi_state_change_req := sbMsgReceiver.io.msgSubCode
-    }.otherwise{
-        rdi_state_change_req := MsgSubCode.Nop
-    }
- 
-    when(
-        sbMsgReceiver.io.handshake.valid === true.B &&
-        sbMsgReceiver.io.opcode === Opcode.MessageWithoutData &&
-        sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Rsp
-    ){
-        rdi_state_change_rsp := sbMsgReceiver.io.msgSubCode
- 
-    }.otherwise{
-        rdi_state_change_rsp := MsgSubCode.Nop
-    }
+    val rdi_state_change_req_received = RegInit(MsgSubCode.Nop)
+    val rdi_state_change_rsp_received = RegInit(MsgSubCode.Nop)
+    val rdi_state_req_rsp = RegInit(0.U(2.W))
+    
+    
 
     switch(phyState) {
         // Link Error, Disabled, Link Reset implemented below switch
@@ -165,14 +150,21 @@ class LogicalPhy(
             // Stage 2: start - exchange parameters on sideband and mainband training
  
            when(io.rdi.lp_state_req === PhyStateReq.active) {
+                // only start dequeue sb message once is at active state
+                sbMsgReceiver.io.handshake.ready := true.B
                 // prioritize ack reply first before state transition to avoid collision
-                when(rdi_state_change_req === MsgSubCode.Active) {
+                when(sbMsgReceiver.io.handshake.valid && 
+                sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req &&
+                sbMsgReceiver.io.msgSubCode === MsgSubCode.Active) {
+                        printf(p"Received phy state to active request from remote phy partner\n")
+                        printf(p"Send ack\n")
+
                         sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
                         sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData
                         sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Rsp
                         sbMsgSenderArbitor.io.phySb.msgSubCode := MsgSubCode.Active
-                        // phyState := PhyState.active
-                        rdi_state_change_req := MsgSubCode.Nop 
+                        rdi_state_req_rsp := rdi_state_req_rsp.bitSet(0.U, true.B)
+
                 }.elsewhen (sb_lock === false.B) {
                     // compose sb message to send to link partner
                     sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
@@ -180,14 +172,24 @@ class LogicalPhy(
                     sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Req
                     sbMsgSenderArbitor.io.phySb.msgSubCode := MsgSubCode.Active
                     sb_lock := true.B 
+                    printf(p"RDI request to Active received from local request, begin initiate bringup\n")
+                    printf(p"Send phy state to active request to remote phy partner\n")
+
                 }.otherwise {
                     // wait for ack 
-                    when(rdi_state_change_rsp === MsgSubCode.Active ) {
-                        // Clear last state req 
-                        phyState := PhyState.active
-                        rdi_state_change_rsp := MsgSubCode.Nop
+                    printf(p"...\n")
+                    when(sbMsgReceiver.io.handshake.valid && 
+                    sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Rsp &&
+                    sbMsgReceiver.io.msgSubCode === MsgSubCode.Active) {
+                        rdi_state_req_rsp := rdi_state_req_rsp.bitSet(1.U, true.B)
                         sb_lock := false.B
                     }
+                }
+                when(rdi_state_req_rsp.andR) {
+                    printf(p"RDI bringup complete, phy transitioned into Active\n")
+                    phyState := PhyState.active
+                    rdi_state_req_rsp := 0.U
+
                 }
             }
             // if receives a request, send response only when local lp_state_req is high

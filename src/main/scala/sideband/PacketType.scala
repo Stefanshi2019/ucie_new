@@ -69,6 +69,8 @@ object MsgCode extends ChiselEnum {
   val ParityFeature_Req     = Value(0x07.U(8.W))
   val ParityFeature_Ack     = Value(0x08.U(8.W))
   val ErrorMsg              = Value(0x09.U(8.W))
+  val AdvCap                = Value(0x10.U(8.W)) // From WslCode, MsgInfo 0000h reserved, FFFFh stall
+  val FinCap                = Value(0x11.U(8.W)) // From WslCode, MsgInfo 0000h reserved, FFFFh stall
   val LinkTraining_Req      = Value(0x85.U(8.W))
   val LinkTraining_Resp     = Value(0x8A.U(8.W))
   val SbOutofReset          = Value(0x91.U(8.W))
@@ -127,6 +129,12 @@ object MsgSubCode extends ChiselEnum {
   val Ack = Value(0x12.U(8.W))  // ParityFeature 0x08
   val Crd = Value(0x13.U(8.W))  // Nop 0x00
  
+
+  val Adaptor = Value(0x14.U(8.W)) // MsgInfo 0000h reserved, FFFFh stall
+  val CXL = Value(0x15.U(8.W)) // MsgInfo 0000h reserved, FFFFh stall
+
+
+
   val dummy = Value(0xFF.U(8.W)) // If not this, Chisel will force optimize the bits to be 5 instead 8. very stupid
   // // Chisel enum doesn't allow mapping to same value
   // // Change to different value for now, will fix later

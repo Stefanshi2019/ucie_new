@@ -51,15 +51,15 @@ object LinkInitState extends ChiselEnum{
 //   val pl_wake_ack = Input(Bool())
 // }
 
-class d2dadaptor (
+class D2DAdaptor (
     rdiParams: RdiParams,
-    fdiParams: FdiParams
+    fdiParams: FdiParams,
 ) extends Module {
 
     val io = IO(new Bundle {
         val fdi = Flipped(new Fdi(fdiParams))
         val rdi = new Rdi(rdiParams)
-        val rdiSb = new SbMsgIO() 
+        val rdiSb = Flipped(new SbMsgIO())
     })
     
     
@@ -80,15 +80,23 @@ class d2dadaptor (
     val rdi_lp_stallack_reg = RegInit(false.B)
     val rdi_lp_clk_ack_reg = RegInit(false.B)
     val rdi_lp_wake_req_reg = RegInit(false.B)
+    val rdi_lpData_valid_reg = RegInit(false.B)
+    val rdi_lpData_irdy_reg = RegInit(false.B)
+    val rdi_lpData_bits_reg = RegInit(0.U((8 * rdiParams.width).W))
 
     io.rdi.lp_state_req := rdi_lp_state_req_reg_pipe_1
     io.rdi.lp_linkerror := rdi_lp_linkerror_reg
     io.rdi.lp_stallack := rdi_lp_stallack_reg
     io.rdi.lp_clk_ack := rdi_lp_clk_ack_reg
     io.rdi.lp_wake_req := rdi_lp_wake_req_reg
+    io.rdi.lpData.valid := rdi_lpData_valid_reg 
+    io.rdi.lpData.irdy := rdi_lpData_irdy_reg 
+    io.rdi.lpData.bits := rdi_lpData_bits_reg
 
     rdi_lp_state_req_reg := PhyStateReq.nop
 
+    
+    
 
     // FDI drivers
     val fdi_lpData_trdy_reg = RegInit(false.B)
@@ -109,13 +117,24 @@ class d2dadaptor (
     // RDI Sideband drivers
 
     io.rdiSb.tx.handshake.valid := false.B 
-    io.rdiSb.tx.opcode := 0.U 
-    io.rdiSb.tx.msgCode := 0.U  
-    io.rdiSb.tx.msgSubCode := 0.U  
-    io.rdiSb.tx.msgInfo := 0.U  
+    io.rdiSb.tx.opcode := Opcode.MessageWithoutData 
+    io.rdiSb.tx.msgCode := MsgCode.Nop
+    io.rdiSb.tx.msgSubCode := MsgSubCode.Nop
+    io.rdiSb.tx.msgInfo := MsgInfo.RegularResponse  
     io.rdiSb.tx.data0 :=  0.U  // assert 0th bit for raw mode
     io.rdiSb.tx.data1 := 0.U // assert 0th bit for raw mode
     
+    io.rdiSb.rx.bits.bits := false.B
+    io.rdiSb.tx.bits.ready := true.B 
+    io.rdi.lpData.bits := 0.U 
+    io.fdi.plData.bits := 0.U 
+
+    io.rdiSb.rx.handshake.ready := true.B 
+    io.rdi.lpData.irdy := false.B 
+    io.fdi.plData.valid := false.B 
+    io.rdi.lpData.valid := false.B 
+    io.rdiSb.rx.bits.valid := false.B 
+     
     // FDI sub signals
     val beginStallreqAck = RegInit(false.B)
     
@@ -291,13 +310,14 @@ class d2dadaptor (
         }
     }
 
+
     // if received an stallreq
     when(io.rdi.pl_stallreq === true.B && io.rdi.lp_stallack === false.B) {
-        io.rdi.lpData.valid := false.B 
-        io.rdi.lpData.irdy := false.B 
-        io.rdi.lp_stallack := true.B
+        rdi_lpData_valid_reg := false.B
+        rdi_lpData_irdy_reg := false.B
+        rdi_lp_stallack_reg := true.B
     }.elsewhen(io.rdi.pl_stallreq === false.B && io.rdi.lp_stallack === true.B) {
-        io.rdi.lp_stallack := false.B
+        rdi_lp_stallack_reg := false.B
     }
     // FSM End ---------------------------------------------------------------
 
@@ -317,14 +337,17 @@ class d2dadaptor (
 // The FSM of RD
         is(LinkInitState.RDI_BRINGUP){
             // Wait for logphy to complete handshake
-            when(io.rdi.pl_inband_pres) {
+            // to ungate adaptor lock
+            // rdi/phy sends pl_inband_pres when at Reset state
+            // when(io.rdi.pl_inband_pres) {
+                
                 rdi_lp_state_req_reg := PhyStateReq.active
                 // should also remove clock gating, but ignore for now. p.s. should be simple
                 when(io.rdi.pl_state_sts === PhyState.active){
                     rdi_lp_state_req_reg := PhyStateReq.nop // deassert state change req
                     linkInitState_reg := LinkInitState.PARAM_EXCH 
                 }
-            } 
+            // } 
         }
 
         is(LinkInitState.PARAM_EXCH){
@@ -332,21 +355,21 @@ class d2dadaptor (
             when (sb_lock === false.B) {
                 io.rdiSb.tx.handshake.valid := true.B 
                 io.rdiSb.tx.opcode := Opcode.MessageWith64bData
-                io.rdiSb.tx.msgCode := WplMsgCode.AdvCap
-                io.rdiSb.tx.msgSubCode := WplMsgSubCode.Adaptor 
+                io.rdiSb.tx.msgCode := MsgCode.AdvCap
+                io.rdiSb.tx.msgSubCode := MsgSubCode.Adaptor 
                 io.rdiSb.tx.data0 := 1.U // assert 0th bit for raw mode
                 sb_lock := true.B 
             }.otherwise {
                 when(io.rdiSb.rx.bits.valid === true.B) {
                     when(
                         io.rdiSb.rx.opcode === Opcode.MessageWith64bData &&
-                        io.rdiSb.rx.msgCode === WplMsgCode.AdvCap &&
-                        io.rdiSb.rx.msgSubCode === WplMsgSubCode.Adaptor 
+                        io.rdiSb.rx.msgCode === MsgCode.AdvCap &&
+                        io.rdiSb.rx.msgSubCode === MsgSubCode.Adaptor 
                     ) {
                         io.rdiSb.tx.handshake.valid := true.B 
                         io.rdiSb.tx.opcode := Opcode.MessageWith64bData
-                        io.rdiSb.tx.msgCode := WplMsgCode.FinCap
-                        io.rdiSb.tx.msgSubCode := WplMsgSubCode.Adaptor 
+                        io.rdiSb.tx.msgCode := MsgCode.FinCap
+                        io.rdiSb.tx.msgSubCode := MsgSubCode.Adaptor 
                         io.rdiSb.tx.data0 := 1.U // assert 0th bit for raw mode
                         sb_lock := false.B
                         linkInitState_reg := LinkInitState.FDI_BRINGUP
@@ -414,9 +437,5 @@ class d2dadaptor (
             linkInitState_reg := LinkInitState.INIT_START  
         } 
     }
-
-
-
-
 
 }
