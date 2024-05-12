@@ -37,6 +37,8 @@ class LogicalPhy(
         val rdiSb = Flipped(new SbMsgIO()) // contains tx and rx
     })
     
+    val sbMsgReceiver_ready = WireInit(false.B)
+
 
     // Initalize temporarily to pass tests
     io.sbAfe.pllLock := false.B
@@ -90,7 +92,7 @@ class LogicalPhy(
     // io.rdiSb.tx.handshake <> sbMsgReceiver.io.handshake 
     io.rdiSb.tx.handshake.valid := sbMsgReceiver.io.handshake.valid
     io.rdiSb.tx.handshake.bits := sbMsgReceiver.io.handshake.bits 
-    sbMsgReceiver.io.handshake.ready := false.B
+    sbMsgReceiver.io.handshake.ready := (io.rdiSb.tx.handshake.ready | sbMsgReceiver_ready)
     io.rdiSb.tx.msgCode := sbMsgReceiver.io.msgCode 
     io.rdiSb.tx.msgSubCode := sbMsgReceiver.io.msgSubCode 
     io.rdiSb.tx.msgInfo := sbMsgReceiver.io.msgInfo
@@ -121,8 +123,6 @@ class LogicalPhy(
     val pl_clk_req_reg = RegInit(false.B)
     val pl_wake_ack_reg = RegInit(false.B)
 
-
-
     io.rdi.pl_state_sts := phyState 
     io.rdi.pl_inband_pres := pl_inband_pres_reg
     io.rdi.pl_error := pl_error_reg
@@ -130,15 +130,11 @@ class LogicalPhy(
     io.rdi.pl_clk_req := pl_clk_req_reg
     io.rdi.pl_wake_ack := pl_wake_ack_reg
 
+    
     val sb_lock = RegInit(false.B)
-    val rdi_state_change_req =  RegInit(MsgSubCode.Nop)
-    val rdi_state_change_rsp = RegInit(MsgSubCode.Nop)
-    val rdi_state_change_req_received = RegInit(MsgSubCode.Nop)
-    val rdi_state_change_rsp_received = RegInit(MsgSubCode.Nop)
     val rdi_state_req_rsp = RegInit(0.U(2.W))
-    
-    
 
+    sbMsgReceiver_ready := false.B
     switch(phyState) {
         // Link Error, Disabled, Link Reset implemented below switch
         is(PhyState.reset) {
@@ -151,22 +147,23 @@ class LogicalPhy(
  
            when(io.rdi.lp_state_req === PhyStateReq.active) {
                 // only start dequeue sb message once is at active state
-                sbMsgReceiver.io.handshake.ready := true.B
+                sbMsgReceiver_ready := true.B
                 // prioritize ack reply first before state transition to avoid collision
                 when(sbMsgReceiver.io.handshake.valid && 
                 sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Req &&
                 sbMsgReceiver.io.msgSubCode === MsgSubCode.Active) {
                         printf(p"Received phy state to active request from remote phy partner\n")
                         printf(p"Send ack\n")
-
+                        // send ack 
                         sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
                         sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData
                         sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Rsp
                         sbMsgSenderArbitor.io.phySb.msgSubCode := MsgSubCode.Active
+                        // remember that have received state change req
                         rdi_state_req_rsp := rdi_state_req_rsp.bitSet(0.U, true.B)
 
                 }.elsewhen (sb_lock === false.B) {
-                    // compose sb message to send to link partner
+                    // send req 
                     sbMsgSenderArbitor.io.phySb.handshake.valid := true.B 
                     sbMsgSenderArbitor.io.phySb.opcode := Opcode.MessageWithoutData
                     sbMsgSenderArbitor.io.phySb.msgCode := MsgCode.LinkMgmt_RDI_Req
@@ -181,19 +178,19 @@ class LogicalPhy(
                     when(sbMsgReceiver.io.handshake.valid && 
                     sbMsgReceiver.io.msgCode === MsgCode.LinkMgmt_RDI_Rsp &&
                     sbMsgReceiver.io.msgSubCode === MsgSubCode.Active) {
+                        // remember that have received ack
                         rdi_state_req_rsp := rdi_state_req_rsp.bitSet(1.U, true.B)
+                        // unhold lock
                         sb_lock := false.B
                     }
                 }
+                // if received both req and ack, can move to active
                 when(rdi_state_req_rsp.andR) {
                     printf(p"RDI bringup complete, phy transitioned into Active\n")
                     phyState := PhyState.active
                     rdi_state_req_rsp := 0.U
-
                 }
-            }
-            // if receives a request, send response only when local lp_state_req is high
-            
+            }            
 
             // Stage 2: complete - exchange parameters on sideband and mainband training
  

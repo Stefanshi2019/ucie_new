@@ -129,7 +129,7 @@ class D2DAdaptor (
     io.rdi.lpData.bits := 0.U 
     io.fdi.plData.bits := 0.U 
 
-    io.rdiSb.rx.handshake.ready := true.B 
+    io.rdiSb.rx.handshake.ready := false.B 
     io.rdi.lpData.irdy := false.B 
     io.fdi.plData.valid := false.B 
     io.rdi.lpData.valid := false.B 
@@ -351,6 +351,19 @@ class D2DAdaptor (
         }
 
         is(LinkInitState.PARAM_EXCH){
+            io.rdiSb.rx.handshake.ready := true.B 
+
+            when(
+            io.rdiSb.rx.handshake.valid === true.B &&
+            io.rdiSb.rx.opcode === Opcode.MessageWith64bData &&
+            io.rdiSb.rx.msgCode === MsgCode.FinCap &&
+            io.rdiSb.rx.msgSubCode === MsgSubCode.Adaptor //&& 
+            // io.rdiSb.rx.data0 === 1.U // assert 0th bit for raw mode, not passing data for now, will implement later
+            ) {
+                sb_lock := false.B
+                linkInitState_reg := LinkInitState.FDI_BRINGUP
+
+            }
             
             when (sb_lock === false.B) {
                 io.rdiSb.tx.handshake.valid := true.B 
@@ -360,7 +373,7 @@ class D2DAdaptor (
                 io.rdiSb.tx.data0 := 1.U // assert 0th bit for raw mode
                 sb_lock := true.B 
             }.otherwise {
-                when(io.rdiSb.rx.bits.valid === true.B) {
+                when(io.rdiSb.rx.handshake.valid === true.B) {
                     when(
                         io.rdiSb.rx.opcode === Opcode.MessageWith64bData &&
                         io.rdiSb.rx.msgCode === MsgCode.AdvCap &&
@@ -399,7 +412,7 @@ class D2DAdaptor (
                         sb_lock := true.B 
                     }.otherwise{
                         // then wait for response, if received, unleash sb_lock
-                        when(io.rdiSb.rx.bits.valid === true.B &&
+                        when(io.rdiSb.rx.handshake.valid === true.B &&
                             io.rdiSb.rx.opcode === Opcode.MessageWith64bData &&
                             io.rdiSb.rx.msgCode === MsgCode.LinkMgmt_Adaptor0_Rsp &&
                             io.rdiSb.rx.msgSubCode === MsgSubCode.Active
